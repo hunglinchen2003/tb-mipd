@@ -153,20 +153,20 @@
         <div class="card">
           <h2>新病人資料</h2>
           <p class="muted">輸入臨床與生化數值。可選擇填 1–3 點 DBS 做 Bayesian 更新；空白則用族群模型推估。</p>
-          <form id="dose-form" class="form-grid" style="margin-top:12px">
-            <label>年齡（歲）<input name="age" type="number" value="46" min="18" max="90" /></label>
+          <form id="dose-form" class="form-grid" style="margin-top:12px" novalidate>
+            <label>年齡（歲）<input name="age" type="number" value="46" min="18" max="90" step="any" /></label>
             <label>性別
               <select name="sex">
                 <option value="M">男性</option>
                 <option value="F">女性</option>
               </select>
             </label>
-            <label>體重 kg<input name="wt" type="number" step="0.1" value="62" /></label>
-            <label>身高 cm<input name="ht" type="number" step="0.1" value="167" /></label>
-            <label>血清肌酸酐 mg/dL<input name="scr" type="number" step="0.01" value="0.86" /></label>
-            <label>白蛋白 g/dL<input name="alb" type="number" step="0.1" value="3.8" /></label>
-            <label>ALT U/L<input name="alt" type="number" value="28" /></label>
-            <label>Hct（小數）<input name="hct" type="number" step="0.01" value="0.40" /></label>
+            <label>體重 kg<input name="wt" type="number" step="any" value="62" /></label>
+            <label>身高 cm<input name="ht" type="number" step="any" value="167" /></label>
+            <label>血清肌酸酐 mg/dL<input name="scr" type="number" step="any" value="0.86" /></label>
+            <label>白蛋白 g/dL<input name="alb" type="number" step="any" value="3.8" /></label>
+            <label>ALT U/L<input name="alt" type="number" step="any" value="28" /></label>
+            <label>Hct（小數）<input name="hct" type="number" step="any" value="0.40" /></label>
             <label>結核型態
               <select name="tbType">
                 <option>肺結核</option>
@@ -182,16 +182,16 @@
                 <option>0.5</option>
               </select>
             </label>
-            <label>目前日劑量 mg<input name="dose" type="number" step="150" value="600" /></label>
+            <label>目前日劑量 mg<input name="dose" type="number" step="any" value="600" /></label>
             <label>HIV
               <select name="hiv">
                 <option value="no">否</option>
                 <option value="yes">是</option>
               </select>
             </label>
-            <label>DBS 2 h (mg/L)<input name="dbs2" type="number" step="0.01" placeholder="選填" /></label>
-            <label>DBS 4 h (mg/L)<input name="dbs4" type="number" step="0.01" placeholder="選填" /></label>
-            <label>DBS 6 h (mg/L)<input name="dbs6" type="number" step="0.01" placeholder="選填" /></label>
+            <label>DBS 2 h (mg/L)<input name="dbs2" type="number" step="any" placeholder="選填" /></label>
+            <label>DBS 4 h (mg/L)<input name="dbs4" type="number" step="any" placeholder="選填" /></label>
+            <label>DBS 6 h (mg/L)<input name="dbs6" type="number" step="any" placeholder="選填" /></label>
             <div class="full" style="display:flex;gap:8px;flex-wrap:wrap">
               <button class="btn primary" type="submit">推估 PK 與劑量</button>
               <button class="btn ghost" type="button" id="btn-example">帶入示例病人</button>

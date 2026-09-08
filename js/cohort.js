@@ -24,7 +24,7 @@
       for (let i = 0; i < g.n; i++) {
         const sex = rng() < 0.38 ? "F" : "M";
         const age = Math.round(PK.clamp(38 + 16 * PK.randn(rng), 18, 82));
-        const ht = sex === "F" ? 156 + 6.2 * PK.randn(rng) : 169 + 6.8 * PK.randn(rng);
+        const ht = PK.clamp(sex === "F" ? 156 + 5.2 * PK.randn(rng) : 169 + 5.6 * PK.randn(rng), 148, 188);
         const wt = PK.clamp((sex === "F" ? 54 : 66) + 11 * PK.randn(rng), 38, 110);
         const bmi = wt / Math.pow(ht / 100, 2);
         const tbType = rng() < 0.82 ? "肺結核" : "肺外結核";

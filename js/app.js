@@ -493,7 +493,10 @@
   });
   document.getElementById("dose-form").addEventListener("submit", renderDose);
   document.getElementById("btn-example").addEventListener("click", () => {
-    const p = patients.find((x) => !x.targetOk) || patients[3];
+    const p =
+      patients.find((x) => !x.targetOk && x.ht >= 150 && x.ht <= 180 && x.wt >= 48 && x.wt <= 85) ||
+      patients.find((x) => !x.targetOk) ||
+      patients[3];
     const form = document.getElementById("dose-form");
     form.age.value = p.age;
     form.sex.value = p.sex;
@@ -510,7 +513,7 @@
     form.dbs2.value = p.dbs2;
     form.dbs4.value = p.dbs4;
     form.dbs6.value = p.dbs6;
-    form.requestSubmit();
+    renderDose();
   });
 
   renderKpis();
