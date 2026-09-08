@@ -2,7 +2,7 @@
 
 Rifampicin **族群藥動學（population PK）** 與 **模型導向精準給藥（MIPD）** 教學原型。瀏覽器端模擬 50 名結核病人、三組劑量、三點乾血片（DBS）與 MIC（MICA）分析，並在另一分頁把估得模型套用到新病人。
 
-線上示範：[GitHub Pages 發布後的網址]
+線上示範：<https://hunglinchen2003.github.io/tb-mipd/>
 
 ## 功能
 
