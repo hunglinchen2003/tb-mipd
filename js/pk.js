@@ -59,12 +59,42 @@
     return egfr;
   }
 
-  function typicalCL(wt, alb, sex) {
-    return TRUE.cl * Math.pow(wt / WT_REF, 0.75) * Math.pow(alb / ALB_REF, -0.42) * (sex === "F" ? 0.88 : 1);
+  function resolveModel(model) {
+    const src = model || TRUE;
+    const num = (a, b) => {
+      const v = src[a];
+      if (v != null && v !== "" && !Number.isNaN(+v)) return +v;
+      return b;
+    };
+    return {
+      tvCL: num("tvCL", num("cl", TRUE.cl)),
+      tvV: num("tvV", num("v", TRUE.v)),
+      tvKA: num("tvKA", num("ka", TRUE.ka)),
+      tlag: num("tlag", TRUE.tlag),
+      omegaCL: num("omegaCL", TRUE.omegaCL),
+      omegaV: num("omegaV", TRUE.omegaV),
+      omegaKA: num("omegaKA", TRUE.omegaKA),
+      sigmaProp: num("sigmaProp", TRUE.sigmaProp),
+      sigmaAdd: num("sigmaAdd", TRUE.sigmaAdd),
+      dbsRatio: num("dbsRatio", TRUE.dbsRatio),
+      method: src.method || "",
+      n: src.n || 0,
+      name: src.name || "",
+      sourceName: src.sourceName || ""
+    };
   }
 
-  function typicalV(wt) {
-    return TRUE.v * (wt / WT_REF);
+  function typicalCL(wt, alb, sex, model) {
+    const m = resolveModel(model);
+    const w = Math.max(20, +wt || WT_REF);
+    const a = Math.max(1.5, +alb || ALB_REF);
+    return m.tvCL * Math.pow(w / WT_REF, 0.75) * Math.pow(a / ALB_REF, -0.42) * (sex === "F" ? 0.88 : 1);
+  }
+
+  function typicalV(wt, model) {
+    const m = resolveModel(model);
+    const w = Math.max(20, +wt || WT_REF);
+    return m.tvV * (w / WT_REF);
   }
 
   function predConc(t, dose, cl, v, ka, tlag, ss) {
@@ -102,8 +132,9 @@
     return (Math.log(2) * v) / cl;
   }
 
-  function plasmaFromDbs(dbs, hct) {
-    const ratio = TRUE.dbsRatio * (0.45 / Math.max(0.25, hct));
+  function plasmaFromDbs(dbs, hct, model) {
+    const m = resolveModel(model);
+    const ratio = m.dbsRatio * (0.45 / Math.max(0.25, hct || 0.4));
     return dbs / clamp(ratio, 0.65, 1.05);
   }
 
@@ -123,25 +154,27 @@
     return { xs, ys };
   }
 
-  function residual(obs, pred) {
-    return TRUE.sigmaAdd * TRUE.sigmaAdd + Math.pow(TRUE.sigmaProp * pred, 2);
+  function residual(obs, pred, model) {
+    const m = resolveModel(model);
+    return m.sigmaAdd * m.sigmaAdd + Math.pow(m.sigmaProp * pred, 2);
   }
 
-  function mapObjective(etas, dose, times, obsPlasma, wt, alb, sex) {
-    const cl = typicalCL(wt, alb, sex) * Math.exp(etas[0]);
-    const v = typicalV(wt) * Math.exp(etas[1]);
-    const ka = TRUE.ka * Math.exp(etas[2]);
+  function mapObjective(etas, dose, times, obsPlasma, wt, alb, sex, model) {
+    const m = resolveModel(model);
+    const cl = typicalCL(wt, alb, sex, m) * Math.exp(etas[0]);
+    const v = typicalV(wt, m) * Math.exp(etas[1]);
+    const ka = m.tvKA * Math.exp(etas[2]);
     let ll = 0;
     for (let i = 0; i < times.length; i++) {
       if (obsPlasma[i] == null || Number.isNaN(obsPlasma[i])) continue;
-      const pred = predConc(times[i], dose, cl, v, ka, TRUE.tlag, true);
-      const varr = residual(obsPlasma[i], pred);
+      const pred = predConc(times[i], dose, cl, v, ka, m.tlag, true);
+      const varr = residual(obsPlasma[i], pred, m);
       const d = obsPlasma[i] - pred;
       ll += 0.5 * (Math.log(2 * Math.PI * varr) + (d * d) / varr);
     }
-    ll += 0.5 * (etas[0] * etas[0] / (TRUE.omegaCL * TRUE.omegaCL) +
-      etas[1] * etas[1] / (TRUE.omegaV * TRUE.omegaV) +
-      etas[2] * etas[2] / (TRUE.omegaKA * TRUE.omegaKA));
+    ll += 0.5 * (etas[0] * etas[0] / (m.omegaCL * m.omegaCL) +
+      etas[1] * etas[1] / (m.omegaV * m.omegaV) +
+      etas[2] * etas[2] / (m.omegaKA * m.omegaKA));
     return { ll, cl, v, ka };
   }
 
@@ -201,56 +234,86 @@
     return pts[0];
   }
 
-  function mapFit(dose, times, obsPlasma, wt, alb, sex) {
-    const fn = (etas) => mapObjective(etas, dose, times, obsPlasma, wt, alb, sex).ll;
+  function mapFit(dose, times, obsPlasma, wt, alb, sex, model) {
+    const m = resolveModel(model);
+    const fn = (etas) => mapObjective(etas, dose, times, obsPlasma, wt, alb, sex, m).ll;
     const etas = nelderMead(fn, [0, 0, 0], 80);
-    const out = mapObjective(etas, dose, times, obsPlasma, wt, alb, sex);
+    const out = mapObjective(etas, dose, times, obsPlasma, wt, alb, sex, m);
     return {
       cl: out.cl,
       v: out.v,
       ka: out.ka,
-      tlag: TRUE.tlag,
+      tlag: m.tlag,
       etas
     };
   }
 
-  function twoStageFit(patients) {
+  function patientSamples(p, model) {
+    if (p.samples && p.samples.length) {
+      return p.samples
+        .map((s) => ({
+          t: +s.t,
+          plasma: s.plasma != null ? +s.plasma : plasmaFromDbs(+s.dbs, p.hct, model)
+        }))
+        .filter((s) => s.t >= 0 && !Number.isNaN(s.plasma));
+    }
+    const out = [];
+    [2, 4, 6].forEach((h) => {
+      const plasma = p["plasma" + h];
+      const dbs = p["dbs" + h];
+      if (plasma != null && !Number.isNaN(+plasma)) out.push({ t: h, plasma: +plasma });
+      else if (dbs != null && dbs !== "" && !Number.isNaN(+dbs)) out.push({ t: h, plasma: plasmaFromDbs(+dbs, p.hct, model) });
+    });
+    return out;
+  }
+
+  function twoStageFit(patients, prior) {
+    const base = resolveModel(prior);
     const cls = [];
     const vs = [];
     const kas = [];
     patients.forEach((p) => {
-      const times = [2, 4, 6];
-      const obs = [p.plasma2, p.plasma4, p.plasma6];
-      const fit = mapFit(p.dose, times, obs, p.wt, p.alb, p.sex);
-      p.estCL = fit.cl;
-      p.estV = fit.v;
-      p.estKA = fit.ka;
-      p.estTlag = fit.tlag;
-      p.estHL = halfLife(fit.cl, fit.v);
-      p.estAUC = auc0tau(p.dose, fit.cl, fit.v, fit.ka, fit.tlag);
-      p.estCmax = predConc(cmaxTime(fit.cl, fit.v, fit.ka, fit.tlag), p.dose, fit.cl, fit.v, fit.ka, fit.tlag, true);
+      const samp = patientSamples(p, base);
+      const times = samp.map((s) => s.t);
+      const obs = samp.map((s) => s.plasma);
+      if (!obs.length) return;
+      const fitI = mapFit(p.dose, times, obs, p.wt, p.alb, p.sex, base);
+      p.estCL = fitI.cl;
+      p.estV = fitI.v;
+      p.estKA = fitI.ka;
+      p.estTlag = fitI.tlag;
+      p.estHL = halfLife(fitI.cl, fitI.v);
+      p.estAUC = auc0tau(p.dose, fitI.cl, fitI.v, fitI.ka, fitI.tlag);
+      p.estCmax = predConc(cmaxTime(fitI.cl, fitI.v, fitI.ka, fitI.tlag), p.dose, fitI.cl, fitI.v, fitI.ka, fitI.tlag, true);
+      p.mic = Math.max(0.015, +p.mic || 0.06);
       p.aucMic = p.estAUC / p.mic;
       p.cmaxMic = p.estCmax / p.mic;
-      p.targetOk = p.estAUC >= 35 && p.aucMic >= 271;
-      cls.push(fit.cl / typicalCL(p.wt, p.alb, p.sex));
-      vs.push(fit.v / typicalV(p.wt));
-      kas.push(fit.ka / TRUE.ka);
+      p.targetOk = p.estAUC >= TARGET_AUC && p.aucMic >= TARGET_AUC_MIC;
+      cls.push(fitI.cl / typicalCL(p.wt, p.alb, p.sex, base));
+      vs.push(fitI.v / typicalV(p.wt, base));
+      kas.push(fitI.ka / base.tvKA);
     });
+    if (!cls.length) {
+      throw new Error("沒有可用的濃度資料，無法建模。");
+    }
     const geo = (arr) => Math.exp(arr.reduce((s, x) => s + Math.log(Math.max(1e-8, x)), 0) / arr.length);
     const sdlog = (arr) => {
       const m = arr.reduce((s, x) => s + Math.log(x), 0) / arr.length;
       const v = arr.reduce((s, x) => s + (Math.log(x) - m) ** 2, 0) / Math.max(1, arr.length - 1);
-      return Math.sqrt(v);
+      return Math.sqrt(Math.max(1e-6, v));
     };
     return {
-      tvCL: TRUE.cl * geo(cls),
-      tvV: TRUE.v * geo(vs),
-      tvKA: TRUE.ka * geo(kas),
-      tlag: TRUE.tlag,
+      tvCL: base.tvCL * geo(cls),
+      tvV: base.tvV * geo(vs),
+      tvKA: base.tvKA * geo(kas),
+      tlag: base.tlag,
       omegaCL: sdlog(cls),
       omegaV: sdlog(vs),
       omegaKA: sdlog(kas),
-      n: patients.length,
+      sigmaProp: base.sigmaProp,
+      sigmaAdd: base.sigmaAdd,
+      dbsRatio: base.dbsRatio,
+      n: cls.length,
       method: "MAP two-stage + allometric covariates (WT, ALB, SEX)"
     };
   }
@@ -304,6 +367,7 @@
     randn,
     lognormal,
     egfrCKDEPI,
+    resolveModel,
     typicalCL,
     typicalV,
     predConc,
@@ -314,6 +378,7 @@
     dbsFromPlasma,
     curve,
     mapFit,
+    patientSamples,
     twoStageFit,
     recommend,
     ptaCurve,

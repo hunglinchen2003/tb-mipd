@@ -1,6 +1,12 @@
 (function () {
-  const patients = COHORT.generateCohort(20240908);
-  const fit = PK.twoStageFit(patients);
+  const LS_MODELS = "tb-mipd-models-v1";
+  const LS_ACTIVE = "tb-mipd-active-v1";
+  const demoPatients = COHORT.generateCohort(20240908);
+  let patients = demoPatients;
+  let fit = PK.twoStageFit(patients);
+  let pending = null;
+  let pendingName = "";
+  let workingMeta = { sourceName: "內建示範世代（50 人）", unsaved: false, fittedAt: new Date().toISOString() };
   const charts = {};
   let groupFilter = "ALL";
   let selectedId = patients[0].id;
@@ -29,6 +35,74 @@
     return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
   }
 
+  function groupsOf(list) {
+    const colors = { A: "#0284c7", B: "#d97706", C: "#7c3aed" };
+    const extra = ["#059669", "#be123c", "#0891b2"];
+    const seen = [];
+    (list || []).forEach((p) => {
+      if (!seen.find((g) => g.id === p.group)) {
+        seen.push({
+          id: p.group,
+          name: p.groupName || p.group,
+          color: colors[p.group] || extra[seen.length % extra.length]
+        });
+      }
+    });
+    return seen.length ? seen : COHORT.GROUPS;
+  }
+
+  function loadSaved() {
+    try {
+      const v = JSON.parse(localStorage.getItem(LS_MODELS) || "[]");
+      return Array.isArray(v) ? v : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function persistSaved(list) {
+    localStorage.setItem(LS_MODELS, JSON.stringify(list));
+  }
+
+  function workingBlob() {
+    const m = PK.resolveModel(fit);
+    return Object.assign({}, m, {
+      id: "working",
+      name: workingMeta.sourceName,
+      savedAt: workingMeta.fittedAt,
+      sourceName: workingMeta.sourceName,
+      unsaved: workingMeta.unsaved,
+      n: fit.n
+    });
+  }
+
+  function selectedApplyModel() {
+    const sel = document.getElementById("dose-model");
+    const id = sel && sel.value ? sel.value : "working";
+    if (id === "working") return PK.resolveModel(fit);
+    const found = loadSaved().find((m) => m.id === id);
+    return PK.resolveModel(found || fit);
+  }
+
+  function setCsvStatus(msg, kind) {
+    const el = document.getElementById("csv-status");
+    if (!el) return;
+    el.innerHTML = msg ? `<div class="toast${kind ? " " + kind : ""}">${msg}</div>` : "";
+  }
+
+  function fillDoseModelSelect() {
+    const sel = document.getElementById("dose-model");
+    if (!sel) return;
+    const prev = sel.value;
+    const saved = loadSaved();
+    const opts = [`<option value="working">目前工作模型 · ${workingMeta.sourceName}${workingMeta.unsaved ? "（未儲存）" : ""}</option>`];
+    saved.forEach((m) => {
+      opts.push(`<option value="${m.id}">${m.name} · n=${m.n} · ${new Date(m.savedAt).toLocaleString("zh-TW")}</option>`);
+    });
+    sel.innerHTML = opts.join("");
+    if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  }
+
   function destroy(id) {
     if (charts[id]) {
       charts[id].destroy();
@@ -49,9 +123,17 @@
     document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
     document.getElementById("page-" + name).classList.add("active");
     if (location.hash.slice(1) !== name) history.replaceState(null, "", "#" + name);
-    if (name === "model") renderModel();
+    if (name === "model") {
+      renderModel();
+      renderSaved();
+      renderPreview();
+      setWorkingStatus();
+    }
     if (name === "mica") renderMica();
-    if (name === "dose") document.getElementById("dose-form").requestSubmit();
+    if (name === "dose") {
+      fillDoseModelSelect();
+      document.getElementById("dose-form").requestSubmit();
+    }
   }
 
   document.getElementById("nav").addEventListener("click", (e) => {
@@ -65,10 +147,10 @@
     const ok = patients.filter((p) => p.targetOk).length;
     const el = document.getElementById("kpis");
     const items = [
-      ["模擬病人", "50", "三組稀疏採樣世代"],
-      ["劑量組", "3", "10 / 15 / 20 mg/kg"],
+      ["目前世代", String(patients.length), workingMeta.sourceName],
+      ["劑量組", String(groupsOf(patients).length), groupsOf(patients).map((g) => g.name).join(" / ")],
       ["DBS 時點", "2 · 4 · 6 h", "乾血片 sparse design"],
-      ["目標達成", ok + " / 50", "AUC ≥ 35 且 AUC/MIC ≥ 271"]
+      ["目標達成", ok + " / " + patients.length, "AUC ≥ 35 且 AUC/MIC ≥ 271"]
     ];
     el.innerHTML = items
       .map(
@@ -78,9 +160,10 @@
       .join("");
 
     const ds = document.getElementById("design-stats");
-    ds.innerHTML = COHORT.GROUPS.map((g) => {
+    ds.innerHTML = groupsOf(patients).map((g) => {
       const sub = patients.filter((p) => p.group === g.id);
-      return `<div class="stat-pill"><span>${g.id} ${g.name}（${g.mgkg} mg/kg）</span><span>n=${sub.length} · 中位劑量 ${pct(sub.map((p) => p.dose), 0.5)} mg</span></div>`;
+      const doses = sub.map((p) => p.dose);
+      return `<div class="stat-pill"><span>${g.id} ${g.name}</span><span>n=${sub.length} · 中位劑量 ${sub.length ? pct(doses, 0.5) : "—"} mg</span></div>`;
     }).join("");
   }
 
@@ -139,13 +222,13 @@
   function renderSpaghetti() {
     const colors = { A: "rgba(2,132,199,0.28)", B: "rgba(217,119,6,0.28)", C: "rgba(124,58,237,0.28)" };
     const datasets = [];
-    COHORT.GROUPS.forEach((g) => {
-      const sub = patients.filter((p) => p.group === g.id);
+    groupsOf(patients).forEach((g) => {
+      const sub = patients.filter((p) => p.group === g.id && p.estCL);
       sub.forEach((p, i) => {
         const c = PK.curve(p.dose, p.estCL, p.estV, p.estKA, p.estTlag, 24, 0.5);
         datasets.push({
           data: c.xs.map((x, j) => ({ x, y: c.ys[j] })),
-          borderColor: i === 0 ? g.color : colors[g.id],
+          borderColor: i === 0 ? g.color : (colors[g.id] || g.color),
           borderWidth: i === 0 ? 2 : 1,
           pointRadius: 0,
           fill: false,
@@ -171,27 +254,29 @@
   }
 
   function renderModel() {
-    document.getElementById("fit-method").textContent = "估計方法：" + fit.method + " · n=" + fit.n;
+    const m = PK.resolveModel(fit);
+    document.getElementById("fit-method").textContent = "估計方法：" + (m.method || fit.method) + " · n=" + m.n + " · 來源 " + workingMeta.sourceName;
     document.getElementById("param-table").innerHTML = `
-      <tr><td>CL/F typical</td><td class="mono">${fmt(fit.tvCL, 2)} L/h</td><td>ω ${(fit.omegaCL * 100).toFixed(0)}%</td></tr>
-      <tr><td>V/F typical</td><td class="mono">${fmt(fit.tvV, 1)} L</td><td>ω ${(fit.omegaV * 100).toFixed(0)}%</td></tr>
-      <tr><td>ka typical</td><td class="mono">${fmt(fit.tvKA, 2)} h⁻¹</td><td>ω ${(fit.omegaKA * 100).toFixed(0)}%</td></tr>
-      <tr><td>tlag</td><td class="mono">${fmt(fit.tlag, 2)} h</td><td>固定</td></tr>
-      <tr><td>殘差</td><td>比例 20% + 加性 0.12</td><td>DBS 校正 6%</td></tr>
+      <tr><td>CL/F typical</td><td class="mono">${fmt(m.tvCL, 2)} L/h</td><td>ω ${(m.omegaCL * 100).toFixed(0)}%</td></tr>
+      <tr><td>V/F typical</td><td class="mono">${fmt(m.tvV, 1)} L</td><td>ω ${(m.omegaV * 100).toFixed(0)}%</td></tr>
+      <tr><td>ka typical</td><td class="mono">${fmt(m.tvKA, 2)} h⁻¹</td><td>ω ${(m.omegaKA * 100).toFixed(0)}%</td></tr>
+      <tr><td>tlag</td><td class="mono">${fmt(m.tlag, 2)} h</td><td>固定</td></tr>
+      <tr><td>殘差</td><td>比例 ${(m.sigmaProp * 100).toFixed(0)}% + 加性 ${m.sigmaAdd}</td><td>DBS 校正</td></tr>
     `;
+    const cov = document.getElementById("cov-formula");
+    if (cov) cov.innerHTML = `CL/F = ${fmt(m.tvCL, 1)} · (WT/70)<sup>0.75</sup> · (ALB/4.0)<sup>−0.42</sup> · 0.88<sup>女性</sup><br>V/F = ${fmt(m.tvV, 1)} · (WT/70)；ka ${fmt(m.tvKA, 2)} h<sup>−1</sup>；t<sub>lag</sub> = ${fmt(m.tlag, 2)} h`;
 
     const pop = [];
     const ind = [];
     patients.forEach((p) => {
-      [2, 4, 6].forEach((h) => {
-        const obs = p["plasma" + h];
-        const ipred = PK.predConc(h, p.dose, p.estCL, p.estV, p.estKA, p.estTlag, true);
-        const ppred = PK.predConc(h, p.dose, PK.typicalCL(p.wt, p.alb, p.sex), PK.typicalV(p.wt), PK.TRUE.ka, PK.TRUE.tlag, true);
-        pop.push({ x: ppred, y: obs });
-        ind.push({ x: ipred, y: obs });
+      PK.patientSamples(p, m).forEach((s) => {
+        const ipred = PK.predConc(s.t, p.dose, p.estCL, p.estV, p.estKA, p.estTlag, true);
+        const ppred = PK.predConc(s.t, p.dose, PK.typicalCL(p.wt, p.alb, p.sex, m), PK.typicalV(p.wt, m), m.tvKA, m.tlag, true);
+        pop.push({ x: ppred, y: s.plasma });
+        ind.push({ x: ipred, y: s.plasma });
       });
     });
-    const max = Math.max(...pop.map((d) => Math.max(d.x, d.y))) * 1.05;
+    const max = Math.max(1, ...pop.map((d) => Math.max(d.x || 0, d.y || 0))) * 1.05;
     makeChart("chart-gof", {
       type: "scatter",
       data: {
@@ -214,13 +299,15 @@
 
     const hours = [];
     for (let t = 0; t <= 24; t += 0.5) hours.push(t);
-    const vpcSets = COHORT.GROUPS.map((g) => {
-      const sub = patients.filter((p) => p.group === g.id);
+    const vpcSets = groupsOf(patients).map((g) => {
+      const sub = patients.filter((p) => p.group === g.id && p.estCL);
       const med = hours.map((t) =>
-        pct(
-          sub.map((p) => PK.predConc(t, p.dose, p.estCL, p.estV, p.estKA, p.estTlag, true)),
-          0.5
-        )
+        sub.length
+          ? pct(
+              sub.map((p) => PK.predConc(t, p.dose, p.estCL, p.estV, p.estKA, p.estTlag, true)),
+              0.5
+            )
+          : 0
       );
       return {
         label: g.name,
@@ -250,7 +337,7 @@
     makeChart("chart-clwt", {
       type: "scatter",
       data: {
-        datasets: COHORT.GROUPS.map((g) => ({
+        datasets: groupsOf(patients).map((g) => ({
           label: g.name,
           data: patients.filter((p) => p.group === g.id).map((p) => ({ x: p.wt, y: p.estCL })),
           backgroundColor: g.color
@@ -275,7 +362,7 @@
     document.getElementById("mica-kpis").innerHTML = [
       ["中位 MIC", fmt(medMic, 3) + " mg/L", "M. tuberculosis MICA"],
       ["中位 AUC/MIC", fmt(medAucMic, 0), "目標 ≥ 271"],
-      ["世代達標率", ((ok / 50) * 100).toFixed(0) + "%", ok + " / 50 人"]
+      ["世代達標率", ((ok / Math.max(1, patients.length)) * 100).toFixed(0) + "%", ok + " / " + patients.length + " 人"]
     ]
       .map(
         ([label, value, hint]) =>
@@ -285,9 +372,11 @@
 
     const dbsPts = [];
     patients.forEach((p) => {
-      dbsPts.push({ x: p.plasma2, y: p.dbs2 });
-      dbsPts.push({ x: p.plasma4, y: p.dbs4 });
-      dbsPts.push({ x: p.plasma6, y: p.dbs6 });
+      [2, 4, 6].forEach((h) => {
+        const pl = p["plasma" + h];
+        const dbs = p["dbs" + h];
+        if (pl != null && pl !== "" && dbs != null && dbs !== "") dbsPts.push({ x: +pl, y: +dbs });
+      });
     });
     makeChart("chart-dbs", {
       type: "scatter",
@@ -326,12 +415,15 @@
     makeChart("chart-aucmic", {
       type: "bar",
       data: {
-        labels: COHORT.GROUPS.map((g) => g.name),
+        labels: groupsOf(patients).map((g) => g.name),
         datasets: [
           {
             label: "中位 AUC/MIC",
-            data: COHORT.GROUPS.map((g) => pct(patients.filter((p) => p.group === g.id).map((p) => p.aucMic), 0.5)),
-            backgroundColor: COHORT.GROUPS.map((g) => g.color)
+            data: groupsOf(patients).map((g) => {
+              const vals = patients.filter((p) => p.group === g.id).map((p) => p.aucMic).filter((x) => x != null);
+              return vals.length ? pct(vals, 0.5) : 0;
+            }),
+            backgroundColor: groupsOf(patients).map((g) => g.color)
           }
         ]
       },
@@ -354,8 +446,9 @@
       kaDraws.push(p.estKA);
     }
     const micGrid = [0.03, 0.06, 0.125, 0.25, 0.5, 1];
-    const ptaSets = COHORT.GROUPS.map((g) => {
-      const medDose = pct(patients.filter((p) => p.group === g.id).map((p) => p.dose), 0.5);
+    const ptaSets = groupsOf(patients).map((g) => {
+      const sub = patients.filter((p) => p.group === g.id);
+      const medDose = sub.length ? pct(sub.map((p) => p.dose), 0.5) : 600;
       const curve = PK.ptaCurve(clDraws, vDraws, kaDraws, medDose, micGrid);
       return {
         label: g.name + " ~" + medDose + " mg",
@@ -392,30 +485,31 @@
     const dose0 = +f.get("dose");
     const scr = +f.get("scr");
     const egfr = PK.egfrCKDEPI(scr, age, sex);
+    const model = selectedApplyModel();
     const times = [];
     const obs = [];
     ["dbs2", "dbs4", "dbs6"].forEach((k, i) => {
       const raw = f.get(k);
       if (raw !== "" && raw != null) {
         times.push([2, 4, 6][i]);
-        obs.push(PK.plasmaFromDbs(+raw, hct));
+        obs.push(PK.plasmaFromDbs(+raw, hct, model));
       }
     });
 
     let cl, v, ka, tlag, mode;
     if (obs.length) {
-      const fitI = PK.mapFit(dose0, times, obs, wt, alb, sex);
+      const fitI = PK.mapFit(dose0, times, obs, wt, alb, sex, model);
       cl = fitI.cl;
       v = fitI.v;
       ka = fitI.ka;
       tlag = fitI.tlag;
-      mode = "Bayesian MAP（" + obs.length + " 點 DBS）";
+      mode = (model.name || "模型") + " · Bayesian MAP（" + obs.length + " 點 DBS）";
     } else {
-      cl = PK.typicalCL(wt, alb, sex);
-      v = PK.typicalV(wt);
-      ka = PK.TRUE.ka;
-      tlag = PK.TRUE.tlag;
-      mode = "族群模型（無濃度）";
+      cl = PK.typicalCL(wt, alb, sex, model);
+      v = PK.typicalV(wt, model);
+      ka = model.tvKA;
+      tlag = model.tlag;
+      mode = (model.name || "族群模型") + "（無濃度）";
     }
 
     const rec = PK.recommend(cl, v, ka, tlag, mic, wt);
@@ -438,7 +532,7 @@
       <p class="legend-note">若 ALT 明顯升高或黃疸，需臨床評估是否調整或暫停 Rifampicin，本模型不替代肝毒性監測。</p>
     `;
 
-    const popC = PK.curve(ch.dose, PK.typicalCL(wt, alb, sex), PK.typicalV(wt), PK.TRUE.ka, tlag, 48, 0.25);
+    const popC = PK.curve(ch.dose, PK.typicalCL(wt, alb, sex, model), PK.typicalV(wt, model), model.tvKA, tlag, 48, 0.25);
     const indC = PK.curve(ch.dose, cl, v, ka, tlag, 48, 0.25);
     const curC = PK.curve(dose0, cl, v, ka, tlag, 48, 0.25);
     const obsPts = times.map((t, i) => ({ x: t, y: obs[i] }));
@@ -474,6 +568,138 @@
         })
         .join("") +
       "</tbody>";
+  }
+
+  function previewRows() {
+    return pending || patients;
+  }
+
+  function renderPreview() {
+    const rows = previewRows().slice(0, 12);
+    const meta = document.getElementById("preview-meta");
+    const n = previewRows().length;
+    if (meta) {
+      meta.textContent = pending
+        ? "待擬合：" + pendingName + " · " + n + " 人。按下「開始建模」後會覆蓋目前工作模型。"
+        : "目前工作世代：" + workingMeta.sourceName + " · " + n + " 人";
+    }
+    const tbl = document.getElementById("preview-table");
+    if (!tbl) return;
+    tbl.innerHTML =
+      "<thead><tr><th>ID</th><th>組</th><th>劑量</th><th>年齡</th><th>性別</th><th>體重</th><th>MIC</th><th>DBS2</th><th>DBS4</th><th>DBS6</th></tr></thead><tbody>" +
+      rows
+        .map(
+          (p) =>
+            `<tr><td>${p.id}</td><td>${p.group}</td><td>${p.dose}</td><td>${p.age}</td><td>${p.sex}</td><td>${p.wt}</td><td>${p.mic}</td><td>${p.dbs2 ?? ""}</td><td>${p.dbs4 ?? ""}</td><td>${p.dbs6 ?? ""}</td></tr>`
+        )
+        .join("") +
+      "</tbody>";
+  }
+
+  function setWorkingStatus() {
+    const el = document.getElementById("working-status");
+    if (!el) return;
+    el.textContent = workingMeta.unsaved
+      ? "工作模型尚未儲存。重新擬合或關閉瀏覽器分頁前請按「儲存模型」。"
+      : "目前模型：" + workingMeta.sourceName + " · n=" + fit.n;
+    el.className = "muted";
+  }
+
+  function renderSaved() {
+    const list = loadSaved();
+    const tbl = document.getElementById("saved-table");
+    if (!tbl) return;
+    if (!list.length) {
+      tbl.innerHTML = "<tbody><tr><td class='muted'>尚無已儲存模型</td></tr></tbody>";
+      return;
+    }
+    tbl.innerHTML =
+      "<thead><tr><th>名稱</th><th>n</th><th>時間</th><th></th></tr></thead><tbody>" +
+      list
+        .map(
+          (m) => `<tr data-mid="${m.id}">
+            <td>${m.name}</td><td>${m.n}</td>
+            <td>${new Date(m.savedAt).toLocaleString("zh-TW")}</td>
+            <td>
+              <button class="btn" data-act="apply" type="button">套用</button>
+              <button class="btn ghost" data-act="export" type="button">JSON</button>
+              <button class="btn ghost" data-act="del" type="button">刪除</button>
+            </td>
+          </tr>`
+        )
+        .join("") +
+      "</tbody>";
+  }
+
+  function refreshAll() {
+    selectedId = patients[0] ? patients[0].id : "";
+    renderKpis();
+    renderTable();
+    if (patients[0]) renderDetail(patients[0]);
+    renderSpaghetti();
+    fillDoseModelSelect();
+    renderPreview();
+    setWorkingStatus();
+    renderSaved();
+  }
+
+  function ingestCsvText(text, filename) {
+    const parsed = CSV.parse(text);
+    pending = parsed.patients;
+    pendingName = filename || "uploaded.csv";
+    document.getElementById("btn-fit").disabled = false;
+    const warn = parsed.warnings && parsed.warnings.length ? " " + parsed.warnings.slice(0, 3).join(" ") : "";
+    setCsvStatus("已讀取 " + pending.length + " 人（" + parsed.format + " 表）。請按「開始建模」。" + warn, "warn");
+    renderPreview();
+  }
+
+  function runFit() {
+    const src = pending || patients;
+    try {
+      fit = PK.twoStageFit(src);
+      patients = src;
+      workingMeta = {
+        sourceName: pending ? pendingName : workingMeta.sourceName,
+        unsaved: !!pending,
+        fittedAt: new Date().toISOString()
+      };
+      pending = null;
+      document.getElementById("btn-fit").disabled = true;
+      setCsvStatus("建模完成：n=" + fit.n + (workingMeta.unsaved ? "。這是工作模型，儲存後才能長期保留。" : ""), workingMeta.unsaved ? "warn" : "");
+      refreshAll();
+      renderModel();
+      renderMica();
+    } catch (err) {
+      setCsvStatus(String(err.message || err), "bad");
+    }
+  }
+
+  function saveWorking() {
+    const name = (document.getElementById("model-name").value || "").trim() || ("RIF 模型 " + new Date().toLocaleString("zh-TW"));
+    const blob = Object.assign(workingBlob(), {
+      id: "m" + Date.now().toString(36),
+      name,
+      savedAt: new Date().toISOString(),
+      unsaved: false
+    });
+    const list = loadSaved();
+    list.unshift(blob);
+    persistSaved(list);
+    workingMeta.unsaved = false;
+    localStorage.setItem(LS_ACTIVE, blob.id);
+    document.getElementById("model-name").value = "";
+    fillDoseModelSelect();
+    const sel = document.getElementById("dose-model");
+    if (sel) sel.value = blob.id;
+    renderSaved();
+    setWorkingStatus();
+    setCsvStatus("已儲存「" + name + "」。可在精準給藥頁套用。");
+  }
+
+  async function onCsvFile(file) {
+    if (!file) return;
+    const text = await file.text();
+    ingestCsvText(text, file.name);
   }
 
   document.querySelector(".filters").addEventListener("click", (e) => {
@@ -512,7 +738,92 @@
     form.hiv.value = p.hiv ? "yes" : "no";
     form.dbs2.value = p.dbs2;
     form.dbs4.value = p.dbs4;
-    form.dbs6.value = p.dbs6;
+    form.dbs6.value = p.dbs6 == null ? "" : p.dbs6;
+    renderDose();
+  });
+
+  document.getElementById("csv-file").addEventListener("change", (e) => onCsvFile(e.target.files[0]));
+  const drop = document.getElementById("drop-zone");
+  ["dragenter", "dragover"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      drop.classList.add("drag");
+    })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      drop.classList.remove("drag");
+    })
+  );
+  drop.addEventListener("drop", (e) => {
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) onCsvFile(f);
+  });
+  document.getElementById("btn-fit").addEventListener("click", runFit);
+  document.getElementById("btn-reset-demo").addEventListener("click", () => {
+    pending = null;
+    pendingName = "";
+    patients = COHORT.generateCohort(20240908);
+    fit = PK.twoStageFit(patients);
+    workingMeta = { sourceName: "內建示範世代（50 人）", unsaved: false, fittedAt: new Date().toISOString() };
+    document.getElementById("btn-fit").disabled = true;
+    setCsvStatus("已載入內建 50 人示範世代。");
+    refreshAll();
+    renderModel();
+  });
+  document.getElementById("btn-dl-template").addEventListener("click", () => {
+    CSV.download("tb-mipd-template.csv", CSV.toTemplate(previewRows()));
+  });
+  document.getElementById("btn-save-model").addEventListener("click", saveWorking);
+  document.getElementById("btn-export-working").addEventListener("click", () => {
+    CSV.download("tb-mipd-model.json", JSON.stringify(workingBlob(), null, 2), "application/json");
+  });
+  document.getElementById("json-file").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      const items = Array.isArray(data) ? data : [data];
+      const list = loadSaved();
+      items.forEach((m) => {
+        if (!m || m.tvCL == null) return;
+        m.id = m.id && m.id !== "working" ? m.id : "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+        m.savedAt = m.savedAt || new Date().toISOString();
+        m.name = m.name || "匯入模型";
+        list.unshift(m);
+      });
+      persistSaved(list);
+      renderSaved();
+      fillDoseModelSelect();
+      setCsvStatus("已匯入 " + items.length + " 個模型 JSON。");
+    } catch (err) {
+      setCsvStatus("JSON 無法讀取：" + err.message, "bad");
+    }
+  });
+  document.getElementById("saved-table").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-act]");
+    const tr = e.target.closest("tr[data-mid]");
+    if (!btn || !tr) return;
+    const id = tr.dataset.mid;
+    const list = loadSaved();
+    const m = list.find((x) => x.id === id);
+    if (!m) return;
+    if (btn.dataset.act === "apply") {
+      localStorage.setItem(LS_ACTIVE, id);
+      fillDoseModelSelect();
+      document.getElementById("dose-model").value = id;
+      showPage("dose");
+    } else if (btn.dataset.act === "export") {
+      CSV.download((m.name || "model") + ".json", JSON.stringify(m, null, 2), "application/json");
+    } else if (btn.dataset.act === "del") {
+      persistSaved(list.filter((x) => x.id !== id));
+      renderSaved();
+      fillDoseModelSelect();
+    }
+  });
+  document.getElementById("dose-model").addEventListener("change", () => {
+    localStorage.setItem(LS_ACTIVE, document.getElementById("dose-model").value);
     renderDose();
   });
 

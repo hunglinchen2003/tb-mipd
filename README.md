@@ -4,6 +4,22 @@ Rifampicin **族群藥動學（population PK）** 與 **模型導向精準給藥
 
 線上示範：<https://hunglinchen2003.github.io/tb-mipd/>
 
+## 試驗 CSV → 建模 → 儲存 → 套用
+
+1. 在 **PopPK 建模** 下載 `data/` 的三份範例試驗，或上傳自己的 CSV。
+2. 按 **開始建模** 擬合工作模型（未儲存會被下次擬合覆蓋）。
+3. 命名後 **儲存模型**（寫入此瀏覽器 localStorage，也可匯出 JSON 備份）。
+4. 到 **精準給藥應用** 下拉選擇已儲存模型，輸入新病人資料推估劑量。
+5. 再上傳新的 CSV 並擬合，即從頭建立工作模型。
+
+範例檔：
+
+| 檔案 | 內容 |
+| --- | --- |
+| `data/trial-a-standard.csv` | A 組標準劑量 10 mg/kg，18 人 |
+| `data/trial-mixed-abc.csv` | A/B/C 三組 10/15/20 mg/kg，50 人 |
+| `data/trial-c-highdose-noisy.csv` | C 組高劑量、較大殘差與部分缺 4 h 點，22 人 |
+
 ## 功能
 
 1. **MIPD 總覽**：起始給藥 → 2/4/6 h 採樣 → 濃度測定 → Bayesian 劑量尋找 → 劑量適應。
