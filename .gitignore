@@ -1,0 +1,8 @@
+IMG_*.JPG
+IMG_*.jpg
+_shots/
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
